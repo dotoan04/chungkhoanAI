@@ -144,10 +144,15 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         bb = SimpleBB(bb_upper, bb_lower, bb_mean)
 
     if bb is not None and not getattr(bb, 'empty', True):
-        # Use simple object attributes for fallback calculation
-        bbu_vals = bb.BBU_20_2_0
-        bbl_vals = bb.BBL_20_2_0
-        bbm_vals = bb.BBM_20_2_0
+        # Handle both DataFrame (from pandas_ta) and SimpleBB object (fallback)
+        if hasattr(bb, 'BBU_20_2_0'):  # SimpleBB object
+            bbu_vals = bb.BBU_20_2_0
+            bbl_vals = bb.BBL_20_2_0
+            bbm_vals = bb.BBM_20_2_0
+        else:  # DataFrame from pandas_ta
+            bbu_vals = bb['BBU_20_2.0']
+            bbl_vals = bb['BBL_20_2.0']
+            bbm_vals = bb['BBM_20_2.0']
 
         out["bb_bw"] = (bbu_vals - bbl_vals) / (bbm_vals + 1e-12)
         out["bb_pctb"] = (out["close"] - bbl_vals) / ((bbu_vals - bbl_vals) + 1e-12)
