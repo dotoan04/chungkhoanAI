@@ -17,19 +17,19 @@ def setup_gpu():
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
             
-            # Set memory limit cho 4GB GPU (dành 3GB cho TensorFlow)
-            tf.config.experimental.set_virtual_device_configuration(
-                gpus[0],
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3072)]
-            )
-            
-            print(f"🚀 Using RTX GPU: {gpus[0]}")
-            print("🔧 Memory limit set to 3GB for stability")
+            print(f"🚀 Using GPU: {gpus[0]}")
             
             # Mixed precision training for RTX cards (tăng tốc + tiết kiệm VRAM)
             policy = tf.keras.mixed_precision.Policy('mixed_float16')
             tf.keras.mixed_precision.set_global_policy(policy)
             print("🔥 Mixed precision FP16 enabled (RTX optimized)")
+
+            # Enable XLA JIT to improve performance
+            try:
+                tf.config.optimizer.set_jit(True)
+                print("⚡ XLA JIT compilation enabled")
+            except Exception as _:
+                pass
             
             return True
             
@@ -140,7 +140,8 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
                     clipnorm=1.0
                 ),
                 loss=huber_bce_loss(delta=1.0, lam=loss_lambda),
-                metrics=['mae']
+                metrics=['mae'],
+                jit_compile=True
             )
         else:
             model.compile(
@@ -150,7 +151,8 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
                     clipnorm=1.0
                 ),
                 loss=tf.keras.losses.Huber(delta=1.0),
-                metrics=['mae']
+                metrics=['mae'],
+                jit_compile=True
             )
 
     ckpt_path = ds_path / f"best_{model_name}_fold{fold}_seed{seed}.keras"
@@ -160,24 +162,26 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
         ModelCheckpoint(str(ckpt_path), monitor="val_loss", save_best_only=True)
     ]
     
-    # Thêm GPU optimizations nếu có
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        # Giảm batch size cho 4GB VRAM thay vì tăng
-        batch_size = max(batch_size // 2, 16)  # Giảm để tránh OOM
-        print(f"🚀 GPU training with optimized batch_size={batch_size} for 4GB VRAM")
-    
+    # Build efficient tf.data pipelines
+    AUTOTUNE = tf.data.AUTOTUNE
+    ds_tr = tf.data.Dataset.from_tensor_slices((X_trs, y_trs))
+    ds_tr = ds_tr.shuffle(len(X_trs)).batch(batch_size).prefetch(AUTOTUNE)
+    ds_va = tf.data.Dataset.from_tensor_slices((X_vas, y_vas))
+    ds_va = ds_va.batch(batch_size).prefetch(AUTOTUNE)
+
+    print(f"🚀 GPU training with batch_size={batch_size}")
+
     model.fit(
-        X_trs, y_trs,
-        validation_data=(X_vas, y_vas),
+        ds_tr,
+        validation_data=ds_va,
         epochs=epochs,
-        batch_size=batch_size,
         verbose=0,
         callbacks=cbs
     )
 
     # Predictions
-    y_pred_te = model.predict(X_tes, verbose=0)
+    ds_te = tf.data.Dataset.from_tensor_slices(X_tes).batch(batch_size).prefetch(AUTOTUNE)
+    y_pred_te = model.predict(ds_te, verbose=0)
     
     if is_multitask:
         # Extract regression predictions and inverse transform
