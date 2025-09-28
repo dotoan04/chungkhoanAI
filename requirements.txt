@@ -2,7 +2,8 @@
 vnstock
 pandas
 numpy
-pandas-ta
+# pandas-ta (compatible version for different numpy versions)
+pandas-ta>=0.3.0b0
 scikit-learn
 matplotlib
 statsmodels
