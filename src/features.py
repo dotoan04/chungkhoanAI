@@ -145,14 +145,43 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     if bb is not None and not getattr(bb, 'empty', True):
         # Handle both DataFrame (from pandas_ta) and SimpleBB object (fallback)
-        if hasattr(bb, 'BBU_20_2_0'):  # SimpleBB object
+        if hasattr(bb, 'BBU_20_2_0'):  # SimpleBB object created as fallback
             bbu_vals = bb.BBU_20_2_0
             bbl_vals = bb.BBL_20_2_0
             bbm_vals = bb.BBM_20_2_0
-        else:  # DataFrame from pandas_ta
-            bbu_vals = bb['BBU_20_2.0']
-            bbl_vals = bb['BBL_20_2.0']
-            bbm_vals = bb['BBM_20_2.0']
+        else:  # DataFrame from pandas_ta with varying column names across versions
+            cols = list(bb.columns)
+            cols_lc_map = {c: c.lower() for c in cols}
+
+            def find_col(keywords):
+                candidates = [c for c in cols if any(k in cols_lc_map[c] for k in keywords)]
+                if not candidates:
+                    return None
+                # Prefer candidates that include typical length/std tokens
+                def score(name: str) -> tuple:
+                    lc = cols_lc_map[name]
+                    return (
+                        1 if '20' in lc else 0,
+                        1 if '2.0' in lc or '_2_' in lc or lc.endswith('_2') or '_2' in lc else 0
+                    )
+                candidates.sort(key=score, reverse=True)
+                return candidates[0]
+
+            upper_col = find_col(['bbu', 'upper', 'hband'])
+            lower_col = find_col(['bbl', 'lower', 'lband'])
+            mid_col   = find_col(['bbm', 'mid', 'basis', 'mavg', 'middle'])
+
+            if upper_col and lower_col and mid_col:
+                bbu_vals = bb[upper_col]
+                bbl_vals = bb[lower_col]
+                bbm_vals = bb[mid_col]
+            else:
+                # Fallback: compute directly from price if detection failed
+                rolling_mean = out["close"].rolling(20).mean()
+                rolling_std = out["close"].rolling(20).std()
+                bbu_vals = rolling_mean + 2 * rolling_std
+                bbl_vals = rolling_mean - 2 * rolling_std
+                bbm_vals = rolling_mean
 
         out["bb_bw"] = (bbu_vals - bbl_vals) / (bbm_vals + 1e-12)
         out["bb_pctb"] = (out["close"] - bbl_vals) / ((bbu_vals - bbl_vals) + 1e-12)
