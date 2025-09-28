@@ -2,7 +2,7 @@
 # This config makes DL models predict prices instead of log returns
 # to compare fairly with baseline models
 
-tickers: ["FPT", "HPG", "VNM"]
+tickers: ["FPT", "HPG"]
 index_symbol: "VNINDEX"
 source: "VCI"
 
@@ -25,7 +25,7 @@ predict_price: true
 
 models: ["tcn", "gru", "lstm"]
 epochs: 50
-batch_size: 64
+batch_size: 256
 learning_rate: 0.001
 patience: 15
 

@@ -35,6 +35,15 @@ tcn:
   loss_lambda: 0.25  # λ for BCE in combined loss
   weight_decay: 1e-4
 
+# New multi-horizon / loss / uncertainty / trading config
+horizons: [5, 10, 20]
+loss_type: huber   # huber | pinball
+lambda_cls: 0.3
+n_mc_dropout: 20
+
+trade_fee: 0.002
+risk_per_trade: 0.01
+
 # Ensemble settings
 ensemble:
   enable: true

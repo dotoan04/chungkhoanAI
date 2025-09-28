@@ -63,19 +63,42 @@ def make_trans(input_shape, lr=1e-3, depth=2):
     return model
 
 # Custom Loss Functions
-def huber_bce_loss(delta=1.0, lam=0.25):
-    """Factory function to create combined Huber + BCE loss"""
-    huber = tf.keras.losses.Huber(delta=delta)
-    bce = tf.keras.losses.BinaryCrossentropy()
-    
-    def combined_loss(y_true, y_pred):
-        # y_true: [batch, 2] - [regression_target, classification_target]
-        # y_pred: [batch, 2] - [regression_pred, classification_pred]
-        reg_loss = huber(y_true[:, 0], y_pred[:, 0])
-        cls_loss = bce(y_true[:, 1], y_pred[:, 1])
-        return reg_loss + lam * cls_loss
-    
-    return combined_loss
+def pinball_loss(q):
+    def loss(y_true, y_pred):
+        e = y_true - y_pred
+        return tf.reduce_mean(tf.maximum(q * e, (q - 1) * e))
+    return loss
+
+def huber_multi_loss(delta=1.0):
+    base = tf.keras.losses.Huber(delta=delta, reduction=tf.keras.losses.Reduction.NONE)
+    def loss(y_true, y_pred):
+        # y_* shape: [batch, H]
+        l = base(y_true, y_pred)
+        return tf.reduce_mean(l)
+    return loss
+
+def bce_multi_loss():
+    base = tf.keras.losses.BinaryCrossentropy(reduction=tf.keras.losses.Reduction.NONE)
+    def loss(y_true, y_pred):
+        l = base(y_true, y_pred)
+        return tf.reduce_mean(l)
+    return loss
+
+def combined_multihorizon_loss(loss_type="huber", delta=1.0, lam=0.3):
+    reg_loss_fn = huber_multi_loss(delta=delta) if loss_type == "huber" else None
+    if loss_type == "pinball":
+        # Use median quantile as default
+        reg_loss_fn = pinball_loss(0.5)
+    cls_loss_fn = bce_multi_loss()
+
+    def loss(y_true, y_pred):
+        # y_true: {"reg": [B,H], "cls": [B,H]}
+        # y_pred: {"reg": [B,H], "cls": [B,H]}
+        reg_l = reg_loss_fn(y_true["reg"], y_pred["reg"]) if reg_loss_fn is not None else 0.0
+        cls_l = cls_loss_fn(y_true["cls"], y_pred["cls"]) if y_true.get("cls") is not None else 0.0
+        return reg_l + lam * cls_l
+
+    return loss
 
 # Squeeze-and-Excitation Block
 def squeeze_excitation_block(x, ratio=16):
@@ -111,7 +134,8 @@ def tcn_residual_block(x, filters=64, kernel_size=5, dilation_rate=1, dropout_ra
 
 # TCN-Residual Model
 def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4, 8], 
-                     dropout_rate=0.1, use_se=True, use_multitask=True, lr=1e-3):
+                     dropout_rate=0.1, use_se=True, use_multitask=True, lr=1e-3,
+                     horizons=None, multihorizon=False, loss_type="huber", lambda_cls=0.3):
     """
     TCN-Residual architecture as specified:
     Input L×d
@@ -142,24 +166,42 @@ def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4
     # Global Average Pooling
     x = L.GlobalAveragePooling1D()(x)
     
-    if use_multitask:
-        # Regression head
+    if use_multitask and multihorizon:
+        H = len(horizons) if horizons is not None else 3
+        # Regression head with MC Dropout
         reg_head = L.Dense(64, activation='relu', name='reg_dense')(x)
-        reg_out = L.Dense(1, name='regression_output')(reg_head)
-        
-        # Classification head (directional prediction)
+        reg_head = L.Dropout(0.1, name='reg_dropout')(reg_head)
+        reg_out = L.Dense(H, name='reg')(reg_head)
+
+        # Classification head with MC Dropout
         cls_head = L.Dense(64, activation='relu', name='cls_dense')(x)
-        cls_out = L.Dense(1, activation='sigmoid', name='classification_output')(cls_head)
-        
-        # Combine outputs
-        outputs = L.Concatenate(name='combined_output')([reg_out, cls_out])
-        
-        model = tf.keras.Model(x_in, outputs, name="tcn_residual_multitask")
-        
-        # Use custom combined loss
+        cls_head = L.Dropout(0.1, name='cls_dropout')(cls_head)
+        cls_out = L.Dense(H, activation='sigmoid', name='cls')(cls_head)
+
+        outputs = {"reg": reg_out, "cls": cls_out}
+
+        model = tf.keras.Model(x_in, outputs, name="tcn_residual_multihorizon")
+
         model.compile(
             optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
-            loss=huber_bce_loss(delta=1.0, lam=0.25),
+            loss=combined_multihorizon_loss(loss_type=loss_type, delta=1.0, lam=lambda_cls),
+            metrics={'reg': ['mae']}
+        )
+    elif use_multitask:
+        # Original multi-task single-horizon
+        reg_head = L.Dense(64, activation='relu', name='reg_dense')(x)
+        reg_out = L.Dense(1, name='regression_output')(reg_head)
+
+        cls_head = L.Dense(64, activation='relu', name='cls_dense')(x)
+        cls_out = L.Dense(1, activation='sigmoid', name='classification_output')(cls_head)
+
+        outputs = L.Concatenate(name='combined_output')([reg_out, cls_out])
+
+        model = tf.keras.Model(x_in, outputs, name="tcn_residual_multitask")
+
+        model.compile(
+            optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
+            loss=huber_multi_loss(delta=1.0),
             metrics=['mae']
         )
     else:
