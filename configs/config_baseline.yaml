@@ -7,7 +7,7 @@ index_symbol: "VNINDEX"
 source: "VCI"
 
 start_date: "2015-01-01"
-end_date: "2025-08-28"
+end_date: "2025-09-28"
 
 lookback: 60
 features:
