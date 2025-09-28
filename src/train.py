@@ -6,35 +6,39 @@ from pathlib import Path
 
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+import gc
 
 # GPU Configuration
-def setup_gpu():
-    """Cấu hình GPU để training tối ưu cho RTX 3050Ti"""
+def setup_gpu(cfg):
+    """Cấu hình GPU tối ưu cho T4 15GB VRAM"""
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if gpus:
         try:
-            # Enable memory growth để tránh OOM với 4GB VRAM
+            # Enable memory growth
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
-            
-            # Set memory limit cho 4GB GPU (dành 3GB cho TensorFlow)
+
+            # Set memory limit from config (default 14GB for T4)
+            memory_limit = cfg.get("gpu", {}).get("memory_limit", 14336)  # 14GB in MB
             tf.config.experimental.set_virtual_device_configuration(
                 gpus[0],
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3072)]
+                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
             )
-            
-            print(f"🚀 Using RTX GPU: {gpus[0]}")
-            print("🔧 Memory limit set to 3GB for stability")
-            
-            # Mixed precision training for RTX cards (tăng tốc + tiết kiệm VRAM)
-            policy = tf.keras.mixed_precision.Policy('mixed_float16')
-            tf.keras.mixed_precision.set_global_policy(policy)
-            print("🔥 Mixed precision FP16 enabled (RTX optimized)")
-            
+
+            print(f"🚀 Using GPU: {gpus[0].name}")
+            print(f"🔧 Memory limit set to {memory_limit}MB")
+
+            # Mixed precision if enabled in config
+            if cfg.get("gpu", {}).get("mixed_precision", True):
+                policy = tf.keras.mixed_precision.Policy('mixed_float16')
+                tf.keras.mixed_precision.set_global_policy(policy)
+                print("🔥 Mixed precision FP16 enabled")
+
             return True
-            
+
         except RuntimeError as e:
             print(f"GPU setup error: {e}")
+            print("Falling back to CPU...")
             return False
     else:
         print("⚠️ No GPU found, using CPU")
@@ -198,6 +202,11 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
             "cls_precision": float(np.mean(y_true_cls[y_pred_cls > 0.5])) if np.sum(y_pred_cls > 0.5) > 0 else 0.0
         }
         
+        # Clear memory before returning
+        del model, X_trs, X_vas, X_tes, y_trs, y_vas, y_tes
+        gc.collect()
+        tf.keras.backend.clear_session()
+
         return metrics, y_true_reg.tolist(), y_pred_reg.tolist(), y_true_cls.tolist(), y_pred_cls.tolist()
     else:
         y_pred_te = y_pred_te.reshape(-1)
@@ -217,19 +226,28 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
             "smape": smape(y_true_te, y_pred_te),
         }
 
+        # Clear memory before returning
+        del model, X_trs, X_vas, X_tes, y_trs, y_vas, y_tes
+        gc.collect()
+        tf.keras.backend.clear_session()
+
         return metrics, y_true_te.tolist(), y_pred_te.tolist(), None, None
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=Path, required=True)
     ap.add_argument("--ensemble", action="store_true", help="Run ensemble training with multiple seeds")
-    ap.add_argument("--gpu", action="store_true", help="Enable GPU training optimizations")
+    ap.add_argument("--no-gpu", action="store_true", help="Disable GPU optimizations")
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config, "r", encoding="utf-8"))
 
-    # Setup GPU if requested
-    if args.gpu:
-        setup_gpu()
+    # Setup GPU (unless disabled)
+    if not args.no_gpu:
+        gpu_enabled = setup_gpu(cfg)
+        if not gpu_enabled:
+            print("⚠️ GPU setup failed, using CPU")
+    else:
+        print("⚠️ GPU disabled by user, using CPU")
 
     models = cfg["models"]
     lookback = int(cfg.get("lookback", 60))
