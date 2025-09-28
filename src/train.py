@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import argparse, yaml
+import gc
 import numpy as np
 from pathlib import Path
 
@@ -24,12 +25,6 @@ def setup_gpu():
             tf.keras.mixed_precision.set_global_policy(policy)
             print("🔥 Mixed precision FP16 enabled (RTX optimized)")
 
-            # Enable XLA JIT to improve performance
-            try:
-                tf.config.optimizer.set_jit(True)
-                print("⚡ XLA JIT compilation enabled")
-            except Exception as _:
-                pass
             
             return True
             
@@ -52,6 +47,25 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
     X_tr, y_tr = npz["X_tr"], npz["y_tr"]
     X_va, y_va = npz["X_va"], npz["y_va"]
     X_te, y_te = npz["X_te"], npz["y_te"]
+
+    # Clean features to avoid NaN/Inf propagating into training
+    def clean_features(X: np.ndarray) -> np.ndarray:
+        X2 = X.astype(np.float32, copy=False)
+        flat = X2.reshape(-1, X2.shape[-1])
+        # Compute per-feature median ignoring NaNs/Inf
+        finite_flat = np.where(np.isfinite(flat), flat, np.nan)
+        medians = np.nanmedian(finite_flat, axis=0)
+        medians = np.where(np.isfinite(medians), medians, 0.0)
+        # Replace non-finite with medians
+        non_finite_mask = ~np.isfinite(flat)
+        if non_finite_mask.any():
+            col_idx = np.where(non_finite_mask)[1]
+            flat[non_finite_mask] = medians[col_idx]
+        return flat.reshape(X2.shape)
+
+    X_tr = clean_features(X_tr)
+    X_va = clean_features(X_va)
+    X_te = clean_features(X_te)
     
     # Check if this is multi-task learning (y has 2 dimensions AND model supports multi-task)
     is_multitask = (len(y_tr.shape) > 1 and y_tr.shape[1] == 2 and model_name.lower() == "tcn")
@@ -96,10 +110,14 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
         y_vas = y_vas.astype(np.float32)
         y_tes = y_tes.astype(np.float32)
     
-    # Ensure X data is float32
-    X_trs = X_trs.astype(np.float32)
-    X_vas = X_vas.astype(np.float32)
-    X_tes = X_tes.astype(np.float32)
+    # Ensure X data is float32 and finite after scaling
+    def ensure_finite(arr: np.ndarray) -> np.ndarray:
+        np.nan_to_num(arr, copy=False, nan=0.0, posinf=1e6, neginf=-1e6)
+        return arr.astype(np.float32, copy=False)
+
+    X_trs = ensure_finite(X_trs)
+    X_vas = ensure_finite(X_vas)
+    X_tes = ensure_finite(X_tes)
 
     # Model configuration
     model_kwargs = {}
@@ -140,8 +158,7 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
                     clipnorm=1.0
                 ),
                 loss=huber_bce_loss(delta=1.0, lam=loss_lambda),
-                metrics=['mae'],
-                jit_compile=True
+                metrics=['mae']
             )
         else:
             model.compile(
@@ -151,8 +168,7 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
                     clipnorm=1.0
                 ),
                 loss=tf.keras.losses.Huber(delta=1.0),
-                metrics=['mae'],
-                jit_compile=True
+                metrics=['mae']
             )
 
     ckpt_path = ds_path / f"best_{model_name}_fold{fold}_seed{seed}.keras"
@@ -165,7 +181,7 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
     # Build efficient tf.data pipelines
     AUTOTUNE = tf.data.AUTOTUNE
     ds_tr = tf.data.Dataset.from_tensor_slices((X_trs, y_trs))
-    ds_tr = ds_tr.shuffle(len(X_trs)).batch(batch_size).prefetch(AUTOTUNE)
+    ds_tr = ds_tr.shuffle(min(len(X_trs), 4096)).batch(batch_size).prefetch(AUTOTUNE)
     ds_va = tf.data.Dataset.from_tensor_slices((X_vas, y_vas))
     ds_va = ds_va.batch(batch_size).prefetch(AUTOTUNE)
 
@@ -182,6 +198,8 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
     # Predictions
     ds_te = tf.data.Dataset.from_tensor_slices(X_tes).batch(batch_size).prefetch(AUTOTUNE)
     y_pred_te = model.predict(ds_te, verbose=0)
+    y_pred_te = np.array(y_pred_te)
+    np.nan_to_num(y_pred_te, copy=False, nan=0.0, posinf=1e6, neginf=-1e6)
     
     if is_multitask:
         # Extract regression predictions and inverse transform
@@ -202,7 +220,7 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
             "cls_precision": float(np.mean(y_true_cls[y_pred_cls > 0.5])) if np.sum(y_pred_cls > 0.5) > 0 else 0.0
         }
         
-        return metrics, y_true_reg.tolist(), y_pred_reg.tolist(), y_true_cls.tolist(), y_pred_cls.tolist()
+        result = (metrics, y_true_reg.tolist(), y_pred_reg.tolist(), y_true_cls.tolist(), y_pred_cls.tolist())
     else:
         y_pred_te = y_pred_te.reshape(-1)
         y_pred_te = scalers.y_scaler.inverse_transform(y_pred_te.reshape(-1,1)).reshape(-1)
@@ -221,7 +239,25 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
             "smape": smape(y_true_te, y_pred_te),
         }
 
-        return metrics, y_true_te.tolist(), y_pred_te.tolist(), None, None
+        result = (metrics, y_true_te.tolist(), y_pred_te.tolist(), None, None)
+
+    # Cleanup to free host memory after each fold
+    try:
+        del ds_tr, ds_va, ds_te
+    except Exception:
+        pass
+    try:
+        del X_tr, X_va, X_te, X_trs, X_vas, X_tes, y_tr, y_va, y_te, y_trs
+    except Exception:
+        pass
+    try:
+        del model
+    except Exception:
+        pass
+    tf.keras.backend.clear_session()
+    gc.collect()
+
+    return result
 
 def main():
     ap = argparse.ArgumentParser()
