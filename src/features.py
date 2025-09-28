@@ -5,8 +5,8 @@ from typing import Optional, Tuple
 
 try:
     import pandas_ta as ta
-    except ImportError:
-        ta = None
+except ImportError:
+    ta = None
 
 from utils import rolling_beta_corr, standardize_calendar
 
