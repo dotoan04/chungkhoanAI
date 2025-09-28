@@ -24,16 +24,10 @@ min_train_size: 756
 predict_price: true
 
 models: ["tcn", "gru", "lstm"]
-epochs: 30
-batch_size: 32
+epochs: 50
+batch_size: 64
 learning_rate: 0.001
-patience: 10
-
-# GPU optimization settings
-gpu:
-  memory_growth: true
-  mixed_precision: true
-  memory_limit: 14336  # 14GB for T4 (leave 1GB for system)
+patience: 15
 
 # TCN-specific parameters
 tcn:
@@ -48,7 +42,7 @@ tcn:
 
 # Ensemble settings
 ensemble:
-  enable: false
+  enable: true
   seeds: [42, 123, 456, 789, 999]
   voting_method: "average"
 

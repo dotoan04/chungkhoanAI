@@ -1,0 +1,17 @@
+{
+  "regression": {
+    "sharpe": 0.1687168648463186,
+    "max_drawdown": -0.22626671208922516,
+    "cumulative_return": 0.05892337358562871,
+    "winrate": 0.4859550561797753,
+    "turnover": 0.0009363295880149813
+  },
+  "classification": {
+    "sharpe": 0.0,
+    "max_drawdown": 0.0,
+    "cumulative_return": 0.0,
+    "winrate": 0.0,
+    "turnover": 0.0,
+    "accuracy": 0.5140449438202247
+  }
+}

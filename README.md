@@ -1,19 +1,6 @@
-# ChungKhoanAI - Vietnamese Stock Price Prediction with TCN-Residual
+# ChungKhoanAI - Hệ Thống Dự Đoán Chứng Khoán TCN-Residual
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.12+-orange.svg)](https://www.tensorflow.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-Advanced stock price prediction system using **TCN-Residual (Temporal Convolutional Network with Residual Connections)** architecture for Vietnamese stock market analysis.
-
-## 🎯 Features
-
-- **TCN-Residual Architecture**: State-of-the-art temporal convolutional networks
-- **Multi-Task Learning**: Predicts both price and direction
-- **Ensemble Learning**: Multiple seeds and window sizes
-- **Comprehensive Baselines**: Naive, SMA, EMA, ARIMA, Holt-Winters
-- **Production Ready**: Full backtesting and evaluation pipeline
-- **Google Colab Support**: Easy cloud deployment
+Hệ thống dự đoán chứng khoán tiên tiến sử dụng kiến trúc **TCN-Residual (Temporal Convolutional Network với Residual Connections)** cho phân tích thị trường chứng khoán Việt Nam.
 
 ## 🏗️ Tổng Quan Kiến Trúc
 
@@ -74,54 +61,17 @@ Trong đó:
 - **Test**: 20%
 - **Phương pháp**: Walk-Forward CV (expanding window)
 
-## 🚀 Quick Start
+## 🚀 Bắt Đầu Nhanh
 
-### Installation
+### 1. Cài Đặt
 ```bash
-# Clone repository
-git clone https://github.com/your-username/chungkhoan-ai.git
-cd chungkhoan-ai
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# or
-.venv\Scripts\activate     # Windows
-
-# Install dependencies
-pip install -U pip
-pip install -r requirements.txt
-pip install statsmodels  # For baseline models
+python -m venv .venv && source .venv/bin/activate
+pip install -U pip && pip install -U -r requirements.txt
 ```
 
-### Basic Usage
+### 2. Pipeline Hoàn Chỉnh
 ```bash
-# Quick demo with baseline models
-python run_baselines.py --tickers FPT HPG VNM
-
-# Compare with deep learning models
-python compare_baselines.py
-```
-
-### Google Colab (Recommended)
-```python
-# 1. Upload these files to Colab:
-# - colab_research_pipeline.ipynb
-# - src/ (code directory)
-# - configs/ (config directory)
-# - requirements.txt
-
-# 2. Open notebook and run cells step by step
-# 3. Download thesis_results.zip when complete
-
-# Note: If you encounter 403 Forbidden errors during data collection,
-# the system will automatically fall back to sample data for demonstration.
-```
-
-### Full Research Pipeline
-```bash
-# Complete pipeline for thesis (30-45 minutes)
-python research_pipeline.py --tickers FPT HPG VNM
+python src/run_all.py
 ```
 
 Thao tác này chạy toàn bộ pipeline:
@@ -362,24 +312,4 @@ python src/ensemble.py --config configs/config.yaml --models tcn gru
 
 ---
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the project
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📧 Contact
-
-For questions or support, please open an issue on GitHub.
-
----
-
-**Note**: This system is designed for research and educational purposes. Always validate results and consider market risks before making trading decisions.
+**Lưu ý**: Hệ thống này được thiết kế cho mục đích nghiên cứu và giáo dục. Luôn xác thực kết quả và cân nhắc rủi ro thị trường trước khi đưa ra quyết định giao dịch.

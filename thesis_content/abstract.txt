@@ -1,0 +1,19 @@
+TÓM TẮT LUẬN VĂN
+
+Đề tài: DỰ ĐOÁN GIÁ CỔ PHIẾU SỬ DỤNG DEEP LEARNING
+       VỚI KIẾN TRÚC TCN-RESIDUAL TRÊN THỊ TRƯỜNG VIỆT NAM
+
+Tác giả: [Tên tác giả]
+Năm: 2025
+
+Tóm tắt:
+
+Nghiên cứu này đề xuất hệ thống dự đoán giá cổ phiếu sử dụng Deep Learning với kiến trúc Temporal Convolutional Network (TCN) cải tiến kết hợp Residual connections. Hệ thống được triển khai trên dữ liệu cổ phiếu Việt Nam (FPT, HPG, VNM) từ năm 2015-2025.
+
+Phương pháp nghiên cứu sử dụng multi-task learning kết hợp dự đoán giá và hướng biến động, ensemble learning với nhiều seeds và kích thước cửa sổ khác nhau. Kết quả thực nghiệm cho thấy mô hình TCN-Residual vượt trội so với các baseline truyền thống (Naive, SMA, EMA, ARIMA) và các mô hình deep learning khác (GRU, LSTM).
+
+Hệ thống đạt được độ chính xác dự đoán cao với RMSE trung bình 0.0148, MAE 0.0108 trên tập test, và cải thiện 5-15% so với mô hình đơn lẻ. Nghiên cứu cũng triển khai hệ thống backtesting toàn diện để đánh giá hiệu suất giao dịch thực tế.
+
+Kết quả nghiên cứu góp phần vào lĩnh vực dự đoán tài chính sử dụng deep learning, đặc biệt phù hợp với đặc thù thị trường chứng khoán Việt Nam.
+
+Từ khóa: Deep Learning, TCN-Residual, dự đoán cổ phiếu, ensemble learning, thị trường Việt Nam

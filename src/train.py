@@ -6,39 +6,35 @@ from pathlib import Path
 
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-import gc
 
 # GPU Configuration
-def setup_gpu(cfg):
-    """Cấu hình GPU tối ưu cho T4 15GB VRAM"""
+def setup_gpu():
+    """Cấu hình GPU để training tối ưu cho RTX 3050Ti"""
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if gpus:
         try:
-            # Enable memory growth
+            # Enable memory growth để tránh OOM với 4GB VRAM
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
-
-            # Set memory limit from config (default 14GB for T4)
-            memory_limit = cfg.get("gpu", {}).get("memory_limit", 14336)  # 14GB in MB
+            
+            # Set memory limit cho 4GB GPU (dành 3GB cho TensorFlow)
             tf.config.experimental.set_virtual_device_configuration(
                 gpus[0],
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
+                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3072)]
             )
-
-            print(f"🚀 Using GPU: {gpus[0].name}")
-            print(f"🔧 Memory limit set to {memory_limit}MB")
-
-            # Mixed precision if enabled in config
-            if cfg.get("gpu", {}).get("mixed_precision", True):
-                policy = tf.keras.mixed_precision.Policy('mixed_float16')
-                tf.keras.mixed_precision.set_global_policy(policy)
-                print("🔥 Mixed precision FP16 enabled")
-
+            
+            print(f"🚀 Using RTX GPU: {gpus[0]}")
+            print("🔧 Memory limit set to 3GB for stability")
+            
+            # Mixed precision training for RTX cards (tăng tốc + tiết kiệm VRAM)
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            print("🔥 Mixed precision FP16 enabled (RTX optimized)")
+            
             return True
-
+            
         except RuntimeError as e:
             print(f"GPU setup error: {e}")
-            print("Falling back to CPU...")
             return False
     else:
         print("⚠️ No GPU found, using CPU")
@@ -164,25 +160,24 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
         ModelCheckpoint(str(ckpt_path), monitor="val_loss", save_best_only=True)
     ]
     
-    # tf.data input pipeline + GPU optimizations
+    # Thêm GPU optimizations nếu có
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if gpus:
-        print(f"🚀 GPU training with optimized batch_size={batch_size} for T4 15GB")
-
-    train_ds = tf.data.Dataset.from_tensor_slices((X_trs, y_trs)).shuffle(len(X_trs)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    val_ds = tf.data.Dataset.from_tensor_slices((X_vas, y_vas)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
-
+        # Giảm batch size cho 4GB VRAM thay vì tăng
+        batch_size = max(batch_size // 2, 16)  # Giảm để tránh OOM
+        print(f"🚀 GPU training with optimized batch_size={batch_size} for 4GB VRAM")
+    
     model.fit(
-        train_ds,
-        validation_data=val_ds,
+        X_trs, y_trs,
+        validation_data=(X_vas, y_vas),
         epochs=epochs,
+        batch_size=batch_size,
         verbose=0,
         callbacks=cbs
     )
 
-    # Predictions (batched)
-    test_ds = tf.data.Dataset.from_tensor_slices(X_tes).batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    y_pred_te = model.predict(test_ds, verbose=0)
+    # Predictions
+    y_pred_te = model.predict(X_tes, verbose=0)
     
     if is_multitask:
         # Extract regression predictions and inverse transform
@@ -203,11 +198,6 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
             "cls_precision": float(np.mean(y_true_cls[y_pred_cls > 0.5])) if np.sum(y_pred_cls > 0.5) > 0 else 0.0
         }
         
-        # Clear memory before returning
-        del model, X_trs, X_vas, X_tes, y_trs, y_vas, y_tes
-        gc.collect()
-        tf.keras.backend.clear_session()
-
         return metrics, y_true_reg.tolist(), y_pred_reg.tolist(), y_true_cls.tolist(), y_pred_cls.tolist()
     else:
         y_pred_te = y_pred_te.reshape(-1)
@@ -227,28 +217,19 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
             "smape": smape(y_true_te, y_pred_te),
         }
 
-        # Clear memory before returning
-        del model, X_trs, X_vas, X_tes, y_trs, y_vas, y_tes
-        gc.collect()
-        tf.keras.backend.clear_session()
-
         return metrics, y_true_te.tolist(), y_pred_te.tolist(), None, None
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=Path, required=True)
     ap.add_argument("--ensemble", action="store_true", help="Run ensemble training with multiple seeds")
-    ap.add_argument("--no-gpu", action="store_true", help="Disable GPU optimizations")
+    ap.add_argument("--gpu", action="store_true", help="Enable GPU training optimizations")
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config, "r", encoding="utf-8"))
 
-    # Setup GPU (unless disabled)
-    if not args.no_gpu:
-        gpu_enabled = setup_gpu(cfg)
-        if not gpu_enabled:
-            print("⚠️ GPU setup failed, using CPU")
-    else:
-        print("⚠️ GPU disabled by user, using CPU")
+    # Setup GPU if requested
+    if args.gpu:
+        setup_gpu()
 
     models = cfg["models"]
     lookback = int(cfg.get("lookback", 60))
