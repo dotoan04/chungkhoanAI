@@ -1,0 +1,47 @@
+tickers: ["FPT", "HPG", "VNM"]
+index_symbol: "VNINDEX"
+source: "VCI"
+
+start_date: "2015-01-01"
+end_date: "2025-08-28"
+
+lookback: 60
+ensemble_lookbacks: [60, 90]  # Multiple window sizes for ensemble
+features:
+  use_market_context: true
+  use_calendar: true
+  use_regime_flags: true
+
+n_splits: 3
+val_size: 252
+test_size: 252
+min_train_size: 756
+
+models: ["tcn", "gru", "lstm"]  # Updated to include TCN
+epochs: 100
+batch_size: 64
+learning_rate: 0.001
+patience: 15
+warmup_epochs: 5
+
+# TCN-specific parameters
+tcn:
+  filters: 64
+  kernel_size: 5
+  dilations: [1, 2, 4, 8]
+  dropout_rate: 0.1
+  use_se: true
+  use_multitask: true
+  loss_lambda: 0.25  # λ for BCE in combined loss
+  weight_decay: 1e-4
+
+# Ensemble settings
+ensemble:
+  enable: true
+  seeds: [42, 123, 456, 789, 999]  # 5 different seeds
+  voting_method: "average"  # average for regression, majority for classification
+
+backtest:
+  enable: true
+  thresh: 0.0
+  fee: 0.001

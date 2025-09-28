@@ -1,0 +1,21 @@
+# Core
+vnstock
+pandas
+numpy
+pandas-ta
+scikit-learn
+matplotlib
+statsmodels
+
+# Deep Learning
+tensorflow
+
+# Optional tuning
+optuna
+
+# Utilities
+PyYAML
+tqdm
+
+# Additional for TCN implementation
+scipy
