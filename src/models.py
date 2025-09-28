@@ -160,7 +160,8 @@ def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4
         model.compile(
             optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
             loss=huber_bce_loss(delta=1.0, lam=0.25),
-            metrics=['mae']
+            metrics=['mae'],
+            jit_compile=True
         )
     else:
         # Single regression head
@@ -171,7 +172,8 @@ def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4
         model.compile(
             optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
             loss=tf.keras.losses.Huber(delta=1.0),
-            metrics=['mae']
+            metrics=['mae'],
+            jit_compile=True
         )
     
     return model

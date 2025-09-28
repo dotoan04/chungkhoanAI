@@ -164,24 +164,25 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42):
         ModelCheckpoint(str(ckpt_path), monitor="val_loss", save_best_only=True)
     ]
     
-    # Thêm GPU optimizations nếu có
+    # tf.data input pipeline + GPU optimizations
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if gpus:
-        # Giảm batch size cho 4GB VRAM thay vì tăng
-        batch_size = max(batch_size // 2, 16)  # Giảm để tránh OOM
-        print(f"🚀 GPU training with optimized batch_size={batch_size} for 4GB VRAM")
-    
+        print(f"🚀 GPU training with optimized batch_size={batch_size} for T4 15GB")
+
+    train_ds = tf.data.Dataset.from_tensor_slices((X_trs, y_trs)).shuffle(len(X_trs)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    val_ds = tf.data.Dataset.from_tensor_slices((X_vas, y_vas)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
     model.fit(
-        X_trs, y_trs,
-        validation_data=(X_vas, y_vas),
+        train_ds,
+        validation_data=val_ds,
         epochs=epochs,
-        batch_size=batch_size,
         verbose=0,
         callbacks=cbs
     )
 
-    # Predictions
-    y_pred_te = model.predict(X_tes, verbose=0)
+    # Predictions (batched)
+    test_ds = tf.data.Dataset.from_tensor_slices(X_tes).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    y_pred_te = model.predict(test_ds, verbose=0)
     
     if is_multitask:
         # Extract regression predictions and inverse transform
