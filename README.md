@@ -113,6 +113,9 @@ python compare_baselines.py
 
 # 2. Open notebook and run cells step by step
 # 3. Download thesis_results.zip when complete
+
+# Note: If you encounter 403 Forbidden errors during data collection,
+# the system will automatically fall back to sample data for demonstration.
 ```
 
 ### Full Research Pipeline
