@@ -48,18 +48,20 @@ def standardize_calendar(df: pd.DataFrame) -> pd.DataFrame:
 @dataclass
 class ScalerBundle:
     x_scaler: RobustScaler
-    y_scaler: RobustScaler
+    y_scaler: RobustScaler = None  # Có thể None khi không scale targets
 
 def fit_transform_scalers(X_tr: np.ndarray, y_tr: np.ndarray):
     xs = RobustScaler()
-    ys = RobustScaler()
+    # KHÔNG scale y (targets) - log-returns đã có distribution hợp lý
     X_tr2 = xs.fit_transform(X_tr.reshape(-1, X_tr.shape[-1])).reshape(X_tr.shape)
-    y_tr2 = ys.fit_transform(y_tr.reshape(-1, 1)).reshape(-1)
-    return ScalerBundle(xs, ys), X_tr2, y_tr2
+    # Giữ nguyên y_tr, không scale
+    y_tr2 = y_tr  # Keep targets as-is
+    return ScalerBundle(xs, None), X_tr2, y_tr2
 
 def apply_scalers(bundle: ScalerBundle, X: np.ndarray, y: np.ndarray):
     X2 = bundle.x_scaler.transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
-    y2 = bundle.y_scaler.transform(y.reshape(-1, 1)).reshape(-1)
+    # KHÔNG scale y (targets)
+    y2 = y  # Keep targets as-is
     return X2, y2
 
 def save_json(path: Path, obj):

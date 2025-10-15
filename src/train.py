@@ -147,11 +147,17 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42, ti
             y_trs = np.column_stack([y_trs_reg, y_tr_cls])
             y_vas = np.column_stack([y_vas_reg, y_va_cls])
             y_tes = np.column_stack([y_tes_reg, y_te_cls])
+        # Ensure correct data types
+        def ensure_float32(y):
+            if isinstance(y, dict):
+                return {k: v.astype(np.float32) for k,v in y.items()}
+            else:
+                return y.astype(np.float32)
         
         # Ensure correct data types
-        y_trs = y_trs.astype(np.float32)
-        y_vas = y_vas.astype(np.float32)
-        y_tes = y_tes.astype(np.float32)
+        y_trs = ensure_float32(y_trs)
+        y_vas = ensure_float32(y_vas)
+        y_tes = ensure_float32(y_tes)
     else:
         # For single-task models, extract only regression targets if multi-dimensional
         if len(y_tr.shape) > 1 and y_tr.shape[1] == 2:
@@ -208,34 +214,70 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42, ti
     # Create model
     model = make_model(model_name, input_shape=X_trs.shape[1:], lr=lr, **model_kwargs)
     
+    # Create optimizer for all models
+    optimizer = tf.keras.optimizers.AdamW(
+        learning_rate=lr,
+        weight_decay=float(cfg.get("tcn", {}).get("weight_decay", 1e-4)),
+        clipnorm=1.0
+    )
+
     # For TCN, optionally use different optimizer settings
     if model_name.lower() == "tcn":
         tcn_config = cfg.get("tcn", {})
         weight_decay = float(tcn_config.get("weight_decay", 1e-4))
         loss_lambda = float(lambda_cls_cfg)
-        
-        # Simple recompile with AdamW and better settings
-        if is_multitask and not enable_mh:
-            from models import huber_multi_loss
-            model.compile(
-                optimizer=tf.keras.optimizers.AdamW(
-                    learning_rate=lr, 
-                    weight_decay=weight_decay,
-                    clipnorm=1.0
-                ),
-                loss=huber_multi_loss(delta=1.0),
-                metrics=['mae']
-            )
+
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=lr,
+            weight_decay=weight_decay,
+            clipnorm=1.0
+        )
+
+
+    # === MULTIHORIZON + MULTITASK (2 outputs: "reg" & "cls") ===
+    if is_multitask and enable_mh:
+        # chọn loss hồi quy
+        if loss_type == "pinball" and pinball_loss is not None:
+            # quantile 0.5 (median); có thể mở rộng 0.1/0.9 nếu đã build multi-quantile
+            reg_loss = pinball_loss(0.5)
         else:
-            model.compile(
-                optimizer=tf.keras.optimizers.AdamW(
-                    learning_rate=lr,
-                    weight_decay=weight_decay,
-                    clipnorm=1.0
-                ),
-                loss=tf.keras.losses.Huber(delta=1.0),
-                metrics=['mae']
-            )
+            reg_loss = tf.keras.losses.Huber(delta=0.1)  # Giảm delta xuống 0.1
+
+        # compile với dict losses/metrics tương ứng từng output
+        model.compile(
+            optimizer=optimizer,
+            loss={"reg": reg_loss, "cls": "binary_crossentropy"},
+            loss_weights={"reg": 1.0, "cls": loss_lambda},
+            metrics={
+                "reg": ["mae"],          # có thể thêm RMSE custom nếu muốn
+                "cls": ["accuracy"]
+            }
+        )
+
+    # === MULTITASK SINGLE-HORIZON (1 output tensor 2-units) ===
+    elif is_multitask and not enable_mh:
+        # mô hình trả 1 tensor (không phải dict) ⇒ dùng loss gộp
+        try:
+            from models import huber_multi_loss
+            loss_fn = huber_multi_loss(delta=0.1)  # Giảm delta xuống 0.1
+        except Exception:
+            # fallback: Huber cho reg + BCE cho cls gộp trong 1 tensor (nếu đã implement)
+            # nếu chưa có loss gộp, nên giữ huber_multi_loss trong models.py
+            loss_fn = tf.keras.losses.Huber(delta=0.1)  # Giảm delta xuống 0.1
+
+        model.compile(
+            optimizer=optimizer,
+            loss=loss_fn,
+            metrics=['mae']
+        )
+
+    # === SINGLE-TASK (1 output) ===
+    else:
+        model.compile(
+            optimizer=optimizer,
+            loss=tf.keras.losses.Huber(delta=0.1),  # Giảm delta xuống 0.1
+            metrics=['mae']
+        )
 
     ckpt_path = ds_path / f"best_{model_name}_fold{fold}_seed{seed}.keras"
     cbs = [
@@ -328,7 +370,14 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42, ti
         y_pred_reg = y_pred_out["reg"]  # [N,H]
         y_pred_cls = y_pred_out["cls"]  # [N,H]
         # Inverse scale regression per horizon using same scaler (approx)
-        y_pred_reg_inv = scalers.y_scaler.inverse_transform(y_pred_reg.reshape(-1,1)).reshape(y_pred_reg.shape)
+        if enable_mh and is_multitask:
+            H = len(horizons)
+            # Inverse scaling for multi-horizon predictions
+            if scalers.y_scaler is not None:
+                y_pred_reg_inv = scalers.y_scaler.inverse_transform(y_pred_reg.reshape(-1,1)).reshape(-1, H)
+            else:
+                # Nếu không scale targets, giữ nguyên predictions
+                y_pred_reg_inv = y_pred_reg.reshape(-1, H)
         # Compute multi-horizon ground truth from prices
         lookback = int(cfg.get("lookback", 60))
         test_dates = _load_dates_for_fold(ds_path, fold, lookback, cfg)
@@ -361,9 +410,13 @@ def train_one_fold(model_name, ds_path: Path, fold: int, cfg, seed: int = 42, ti
             }
         result = {"fold": fold, "mh_metrics": mh_metrics, "mh_uq": mh_uq_payload}
     else:
-        y_pred_te = y_pred_te.reshape(-1)
-        y_pred_te = scalers.y_scaler.inverse_transform(y_pred_te.reshape(-1,1)).reshape(-1)
-        
+        # Inverse scaling for predictions
+        if scalers.y_scaler is not None:
+            y_pred_te = scalers.y_scaler.inverse_transform(y_pred_te.reshape(-1,1)).reshape(-1)
+        else:
+            # Nếu không scale targets, giữ nguyên predictions
+            y_pred_te = y_pred_te.reshape(-1)
+            
         # Check if original targets were multi-task but model is single-task
         if len(y_te.shape) > 1 and y_te.shape[1] == 2:
             # Use only regression target for single-task model
@@ -457,7 +510,11 @@ def main():
 
                         metrics_list = []
                         preds_all = []
-                        
+                        def ensure_float32(y):
+                          if isinstance(y, dict):
+                            return {k: v.astype(np.float32) for k,v in y.items()}
+                          else:
+                            return y.astype(np.float32)
                         for f in folds:
                             result = train_one_fold(model_name, ds_path, f, cfg, seed, ticker)
                             if isinstance(result, dict) and "mh_metrics" in result:
@@ -517,15 +574,27 @@ def main():
                     # Calculate ensemble statistics
                     import pandas as pd
                     mdf = pd.DataFrame(all_metrics)
-                    ensemble_stats = mdf.groupby('fold').agg({
-                        'rmse': ['mean', 'std'],
-                        'mae': ['mean', 'std'],
-                        'mape': ['mean', 'std'],
-                        'smape': ['mean', 'std']
-                    }).round(6)
-                    ensemble_stats.to_csv(ensemble_dir / "ensemble_stats.csv")
-                    print(f"[OK] {ticker} {model_name} L{lb} ensemble stats:")
-                    print(ensemble_stats)
+                    # Handle both traditional metrics and multi-horizon metrics
+                    available_cols = mdf.columns.tolist()
+                    agg_dict = {}
+
+                    # Traditional metrics
+                    for col in ['rmse', 'mae', 'mape', 'smape']:
+                        if col in available_cols:
+                            agg_dict[col] = ['mean', 'std']
+
+                    # Multi-horizon metrics (da@*, ic@*, sharpe_like@*)
+                    mh_cols = [c for c in available_cols if any(c.startswith(prefix) for prefix in ['da@', 'ic@', 'sharpe_like@'])]
+                    for col in mh_cols:
+                        agg_dict[col] = ['mean', 'std']
+
+                    if agg_dict:
+                        ensemble_stats = mdf.groupby('fold').agg(agg_dict).round(6)
+                        ensemble_stats.to_csv(ensemble_dir / "ensemble_stats.csv")
+                        print(f"[OK] {ticker} {model_name} L{lb} ensemble stats:")
+                        print(ensemble_stats)
+                    else:
+                        print(f"[WARN] No metrics found for ensemble stats calculation")
                     
                 else:
                     # Single seed training (original behavior)

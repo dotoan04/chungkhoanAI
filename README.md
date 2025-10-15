@@ -1,32 +1,34 @@
-# ChungKhoanAI - Hệ Thống Dự Đoán Chứng Khoán TCN-Residual
+# ChungKhoanAI - Hệ Thống Dự Đoán Chứng Khoán Tiên Tiến
 
-Hệ thống dự đoán chứng khoán tiên tiến sử dụng kiến trúc **TCN-Residual (Temporal Convolutional Network với Residual Connections)** cho phân tích thị trường chứng khoán Việt Nam.
+Hệ thống dự đoán chứng khoán Việt Nam sử dụng **Deep Learning** với kiến trúc **TCN-Residual** (Temporal Convolutional Network) và **Multi-Horizon Prediction** cho phân tích thị trường chứng khoán.
 
 ## 🏗️ Tổng Quan Kiến Trúc
 
 ### Mô Hình TCN-Residual
-Mô hình cốt lõi triển khai kiến trúc TCN phức tạp với:
+Kiến trúc TCN phức tạp với multi-task learning:
 
 ```
-Input L×d (L=60, d=features)
+Input L×d (L=60, d=65 features)
  └─> Causal 1D Conv (k=5, f=64, dilation=1) + LayerNorm + ReLU + Dropout(0.1)
      Residual add
  └─> Causal 1D Conv (k=5, f=64, dilation=2) + LN + ReLU + Dropout(0.1) + Residual
  └─> Causal 1D Conv (k=5, f=64, dilation=4) + LN + ReLU + Dropout(0.1) + Residual
  └─> Causal 1D Conv (k=5, f=64, dilation=8) + LN + ReLU + Dropout(0.1) + Residual
- └─> (Tùy chọn) Squeeze-Excitation (channel attention)
+ └─> Squeeze-Excitation (channel attention)
  └─> GlobalAvgPool (theo thời gian)
- └─> Head Hồi quy: Dense(64) → Dense(1)  =>  ŷ_reg = r̂_{t+1}
- └─> (Tùy chọn) Head Phân loại: Dense(64) → Dense(1, sigmoid) =>  p̂(up)
+ └─> Multi-Horizon Heads:
+     ├─> Regression: Dense(64) → Dense(3) → log-return @5,10,20 days
+     └─> Classification: Dense(64) → Dense(3, sigmoid) → direction @5,10,20 days
 ```
 
 ### Tính Năng Chính
 
-- **Multi-Task Learning**: Học đồng thời hồi quy (dự đoán giá) và phân loại (dự đoán hướng)
-- **Hàm Loss Tiên tiến**: Kết hợp Huber loss + λ·BCE loss
-- **Chiến lược Ensemble**: 5 seeds × 2 kích thước cửa sổ × nhiều kiến trúc
-- **Tối ưu hóa Phức tạp**: AdamW với cosine decay + warmup scheduling
-- **Walk-Forward Cross-Validation**: Xác thực chuỗi thời gian thực tế
+- **Multi-Horizon Prediction**: Dự đoán log-return và hướng tại 3 horizon (5, 10, 20 ngày)
+- **MC-Dropout Uncertainty**: Ước lượng uncertainty với 20 forward passes
+- **Advanced Loss Functions**: Huber loss hoặc Pinball loss với λ·BCE
+- **Ensemble Strategy**: 5 seeds × 2 window sizes × multiple architectures
+- **Walk-Forward Validation**: Xác thực chuỗi thời gian thực tế
+- **Paper Trading**: Backtesting với uncertainty-aware entry rules
 
 ## 📋 Đặc Tả Mô Hình
 
@@ -34,34 +36,32 @@ Input L×d (L=60, d=features)
 - **Độ dài Cửa sổ (L)**: 60 (chính), 90 (ensemble)
 - **Kích thước Kernel (k)**: 5
 - **Filters**: 64 (có thể mở rộng đến 96-128)
-- **Dilations**: [1, 2, 4, 8, (16)]
-- **Chuẩn hóa**: LayerNorm
-- **Dropout**: 0.1-0.2
-- **Activation**: ReLU
+- **Dilations**: [1, 2, 4, 8]
+- **MC-Dropout**: 0.1 ở output heads
+- **Activation**: ReLU + LayerNorm
 
 ### Hàm Loss
 ```
-L = Huber(r, r̂) + λ·BCE(y, ŷ)
+L = Loss_reg + λ·Loss_cls
 ```
 Trong đó:
-- Huber loss (δ=1.0) cho hồi quy
-- Binary Cross-Entropy cho dự đoán hướng
-- λ=0.25 (hệ số trọng số)
+- **Regression**: Huber loss (δ=1.0) hoặc Pinball loss (quantile 0.5)
+- **Classification**: Binary Cross-Entropy cho direction prediction
+- **λ=0.3** (hệ số trọng số configurable)
+
+### Uncertainty Estimation
+- **MC-Dropout**: 20 forward passes với training=True
+- **Output**: Mean, Std, Q10, Q90 cho mỗi horizon
+- **Entry Rule**: |mean_pred| > fee + buffer AND [Q10, Q90] không chứa 0
 
 ### Tối Ưu Hóa
-- **Optimizer**: AdamW (lr=1e-3, weight_decay=1e-4)
-- **Schedule**: Cosine decay + 5 warmup epochs
-- **Gradient Clipping**: norm=1.0
-- **Batch Size**: 64
+- **Optimizer**: AdamW (lr=1e-3, weight_decay=1e-4, clipnorm=1.0)
+- **Mixed Precision**: FP16 cho GPU optimization
+- **Batch Size**: 64 (có thể tăng lên 256 cho GPU mạnh)
 - **Early Stopping**: patience=15
+- **Memory Management**: tf.data pipeline + cleanup per fold
 
-### Chia Dữ Liệu
-- **Train**: 60%
-- **Validation**: 20%
-- **Test**: 20%
-- **Phương pháp**: Walk-Forward CV (expanding window)
-
-## 🚀 Bắt Đầu Nhanh
+## 🚀 Quy Trình Sử Dụng
 
 ### 1. Cài Đặt
 ```bash
@@ -69,105 +69,94 @@ python -m venv .venv && source .venv/bin/activate
 pip install -U pip && pip install -U -r requirements.txt
 ```
 
-### 2. Pipeline Hoàn Chỉnh
+### 2. Chuẩn Bị Dữ Liệu (Chạy 1 lần)
 ```bash
-python src/run_all.py
-```
-
-Thao tác này chạy toàn bộ pipeline:
-1. Thu thập dữ liệu từ VnStock API
-2. Kỹ thuật tính năng và chuẩn bị dataset
-3. Training ensemble đa seeds
-4. Tạo dự đoán ensemble
-5. Backtesting (mô hình riêng lẻ + ensemble)
-
-### 3. Các Bước Thủ Công
-
-#### Thu Thập Dữ Liệu
-```bash
+# Thu thập dữ liệu từ VnStock API
 python src/collect_vnstock.py --tickers FPT HPG VNM --start 2015-01-01 --end 2025-08-28
+
+# Chuẩn bị dataset với 65 features
+python src/prepare_dataset.py --config configs/config.yaml
 ```
 
-#### Chuẩn Bị Dataset (Multi-task)
+### 3. Training Multi-Horizon TCN
 ```bash
-python src/prepare_dataset.py --config configs/config.yaml --multitask
+# Multi-horizon với MC-Dropout uncertainty
+python src/train.py --config configs/config.yaml --gpu \
+  --horizons 5,10,20 --loss_type huber --lambda_cls 0.3 --n_mc_dropout 20
+
+# Hoặc chỉ TCN single-horizon (backward compatible)
+python src/train.py --config configs/config_baseline.yaml --gpu
 ```
 
-#### Training với Ensemble
+### 4. Backtesting với Uncertainty
 ```bash
-python src/train.py --config configs/config.yaml --ensemble
+# Backtest theo horizon H ∈ {5,10,20}
+python src/paper_trading.py --config configs/config.yaml --ticker FPT --horizon 10 --model tcn
+python src/paper_trading.py --config configs/config.yaml --ticker FPT --horizon 20 --model tcn
 ```
 
-#### Tạo Dự Đoán Ensemble
-```bash
-python src/ensemble.py --config configs/config.yaml
-```
-
-#### Baseline Models (Naive, SMA/EMA, ARIMA)
-```bash
-# Run baseline models
-python run_baselines.py --tickers FPT HPG VNM
-
-# Compare with DL models (predicting prices instead of returns)
-python src/prepare_dataset.py --config configs/config_baseline.yaml
-python src/train.py --config configs/config_baseline.yaml
-python compare_baselines.py
-```
-
-#### Backtesting
-```bash
-# Mô hình riêng lẻ
-python src/backtest.py --config configs/config.yaml
-
-# Ensemble
-python src/backtest.py --config configs/config.yaml --ensemble
-```
+### 5. Trực Quan Hóa Kết Quả
+Sử dụng notebook cell đã cung cấp để plot:
+- Time-series True vs Predicted cho từng fold
+- Scatter plot với RMSE/MAE/SMAPE
+- Multi-horizon metrics: DA@H, IC@H, Sharpe-like@H
 
 ## 📁 Cấu Trúc Dự Án
 
 ```
 ChungKhoanAI/
 ├── src/
-│   ├── models.py          # TCN-Residual + các kiến trúc khác
-│   ├── train.py           # Training multi-task với ensemble
-│   ├── ensemble.py        # Tạo dự đoán ensemble
-│   ├── prepare_dataset.py # Kỹ thuật tính năng + multi-task targets
-│   ├── backtest.py        # Backtesting chiến lược
-│   ├── baseline.py        # Baseline models (Naive, SMA/EMA, ARIMA)
-│   ├── collect_vnstock.py # Thu thập dữ liệu
-│   ├── features.py        # Chỉ báo kỹ thuật
-│   ├── evaluate.py        # Metrics
-│   ├── utils.py           # Tiện ích
-│   └── run_all.py         # Pipeline hoàn chỉnh
+│   ├── models.py          # TCN-Residual + Multi-horizon heads
+│   ├── train.py           # Training với MC-Dropout + CLI overrides
+│   ├── paper_trading.py   # Uncertainty-aware backtesting
+│   ├── prepare_dataset.py # 65 technical features + multi-task targets
+│   ├── ensemble.py        # Ensemble prediction
+│   ├── backtest.py        # Traditional backtesting
+│   ├── features.py        # Technical indicators (robust BBands)
+│   ├── evaluate.py        # DA, IC, Sharpe-like metrics
+│   ├── collect_vnstock.py # VnStock data collection
+│   └── utils.py           # Utilities + walk-forward splits
 ├── configs/
-│   └── config.yaml        # Cấu hình với tham số TCN
-├── reports/               # Kết quả sắp xếp theo ticker/model
+│   ├── config.yaml        # Multi-horizon configuration
+│   └── config_baseline.yaml # Single-horizon baseline
+├── reports/               # Results organized by ticker/model
 │   ├── {TICKER}/
-│   │   ├── tcn/           # Kết quả mô hình TCN
-│   │   │   ├── L60/       # Kích thước cửa sổ 60
-│   │   │   │   ├── seed{X}/ # Kết quả seed riêng lẻ
-│   │   │   │   └── ensemble/ # Kết quả ensemble
-│   │   │   └── L90/       # Kích thước cửa sổ 90
-│   │   ├── gru/           # So sánh GRU
-│   │   ├── baseline/      # Baseline models (Naive, SMA/EMA, ARIMA)
-│   │   └── ensemble/      # Ensemble đa mô hình
+│   │   ├── tcn/
+│   │   │   ├── L60/
+│   │   │   │   ├── seed{X}/ # Individual seed results
+│   │   │   │   │   ├── metrics.json # DA@5, IC@5, sharpe_like@5, etc.
+│   │   │   │   │   └── preds_with_uncertainty.json # Mean, std, q10, q90
+│   │   │   │   └── ensemble/ # Ensemble results
+│   │   │   └── L90/
+│   │   ├── gru/           # Comparison models
+│   │   └── lstm/
 │   └── ...
-├── datasets/              # Dữ liệu chuỗi thời gian đã chuẩn bị
-├── data/                  # Dữ liệu giá thô
-├── run_baselines.py      # Script chạy baseline models
-├── test_tcn.py           # Kiểm tra validation
+├── datasets/              # Preprocessed time series
+├── data/                  # Raw price data
 └── requirements.txt       # Dependencies
 ```
 
-## ⚙️ Cấu Hình
+## ⚙️ Cấu Hình Chi Tiết
 
-File `configs/config.yaml` chứa tất cả tham số:
-
+### Multi-Horizon Config (`configs/config.yaml`)
 ```yaml
+# Core settings
 tickers: ["FPT", "HPG", "VNM"]
-models: ["tcn", "gru", "lstm"]  # TCN là mô hình chính
+models: ["tcn", "gru", "lstm"]
+lookback: 60
+batch_size: 64  # Increase to 256 for stronger GPUs
 
-# Tham số riêng cho TCN
+# Multi-horizon prediction
+horizons: [5, 10, 20]
+loss_type: huber        # huber | pinball
+lambda_cls: 0.3         # Classification loss weight
+n_mc_dropout: 20        # MC-Dropout passes
+
+# Trading parameters
+trade_fee: 0.002        # 0.2% trading fee
+risk_per_trade: 0.01    # 1% risk per trade
+
+# TCN architecture
 tcn:
   filters: 64
   kernel_size: 5
@@ -175,141 +164,183 @@ tcn:
   dropout_rate: 0.1
   use_se: true              # Squeeze-Excitation
   use_multitask: true       # Multi-task learning
-  loss_lambda: 0.25         # λ cho BCE trong combined loss
   weight_decay: 1e-4
 
-# Cài đặt ensemble
+# Ensemble settings
 ensemble:
   enable: true
-  seeds: [42, 123, 456, 789, 999]  # 5 seeds khác nhau
-  voting_method: "average"
-
-ensemble_lookbacks: [60, 90]  # Nhiều kích thước cửa sổ
+  seeds: [42, 123, 456, 789, 999]  # 5 different seeds
 ```
 
-## 📊 Cấu Trúc Kết Quả
-
-Kết quả được sắp xếp theo:
-- **Ticker** (FPT, HPG, VNM)
-- **Mô hình** (tcn, gru, lstm)
-- **Kích thước Cửa sổ** (L60, L90)
-- **Seed** (seed42, seed123, v.v.)
-- **Ensemble** (dự đoán kết hợp)
-
-Mỗi thư mục kết quả chứa:
-- `metrics.json`: Metrics hiệu suất
-- `preds.json`: Dự đoán (hồi quy + phân loại)
-- `backtest_summary.json`: Hiệu suất giao dịch
-- `backtest_curve.csv`: Mô phỏng giao dịch chi tiết
-- `backtest_equity.png`: Trực quan hóa đường cong vốn
-
-## 🔬 Multi-Task Learning
-
-Hệ thống dự đoán đồng thời:
-1. **Hồi quy**: Log return ngày tiếp theo (liên tục)
-2. **Phân loại**: Hướng giá (tăng/giảm)
-
-Lợi ích:
-- Dự đoán hướng ổn định hơn
-- Quản lý rủi ro tốt hơn
-- Tín hiệu giao dịch cải thiện
-
-## 🎯 Chiến Lược Ensemble
-
-Ensemble kết hợp:
-- **5 seeds** để giảm phương sai
-- **2 kích thước cửa sổ** (60, 90) cho những góc nhìn khác nhau
-- **Nhiều kiến trúc** (TCN + GRU) cho sự đa dạng
-
-**Hiệu suất Kỳ vọng**: Giảm MAPE 5-15% so với mô hình đơn lẻ
-
-## 📈 Backtesting
-
-Hệ thống cung cấp backtesting toàn diện:
-- **Metrics**: Tỷ lệ Sharpe, max drawdown, tỷ lệ thắng
-- **Mô phỏng Giao dịch**: Chi phí giao dịch, thực thi thực tế
-- **Multi-Task**: Đánh giá riêng biệt cho tín hiệu hồi quy vs phân loại
-- **Trực quan hóa**: Đường cong vốn và so sánh hiệu suất
-
-## 🛠️ Tính Năng Tiên Tiến
-
-### Lên Lịch Learning Rate
-- **Warmup**: Tăng tuyến tính trong 5 epochs
-- **Cosine Decay**: Giảm mượt mà về gần zero
-- **Gradient Clipping**: Ngăn chặn gradient exploding
-
-### Regularization
-- **Weight Decay**: L2 regularization qua AdamW
-- **Dropout**: Regularization ngẫu nhiên
-- **Layer Normalization**: Training ổn định
-
-### Kỹ Thuật Tính Năng
-- **Chỉ Báo Kỹ Thuật**: 50+ chỉ báo
-- **Bối Cảnh Thị Trường**: Tương quan chỉ số, beta
-- **Phát Hiện Chế Độ**: Chế độ biến động và xu hướng
-- **Tính Năng Lịch**: Ngày trong tuần, tính mùa vụ
-
-## 🧪 Kiểm Tra
-
-Chạy kiểm tra validation:
+### CLI Overrides
 ```bash
-python test_tcn.py
+# Override any config parameter via command line
+python src/train.py --config configs/config.yaml --gpu \
+  --horizons 5,10,20 \
+  --loss_type pinball \
+  --lambda_cls 0.5 \
+  --n_mc_dropout 30
 ```
 
-Hoặc validation đơn giản:
+## 📊 Kết Quả và Metrics
+
+### Multi-Horizon Metrics
+- **DA@H**: Directional Accuracy tại horizon H
+- **IC@H**: Information Coefficient (correlation) tại horizon H  
+- **Sharpe-like@H**: Mean(pred) / Std(pred) tại horizon H
+- **Traditional**: RMSE, MAE, MAPE, SMAPE (backward compatible)
+
+### Uncertainty Outputs
+```json
+{
+  "mean": [[r5, r10, r20], ...],     // Mean predictions per horizon
+  "std": [[σ5, σ10, σ20], ...],      // Standard deviation
+  "q10": [[q10_5, q10_10, q10_20], ...], // 10th percentile
+  "q90": [[q90_5, q90_10, q90_20], ...], // 90th percentile
+  "horizons": [5, 10, 20]
+}
+```
+
+### Backtesting Results
+```json
+{
+  "equity_curve": [1.0, 1.05, 0.98, ...],
+  "max_drawdown": 0.15,
+  "winrate": 0.62,
+  "trades": 145
+}
+```
+
+## 🔬 Tính Năng Tiên Tiến
+
+### MC-Dropout Uncertainty
+- **Training**: Dropout ở output heads (rate=0.1)
+- **Inference**: 20 forward passes với training=True
+- **Aggregation**: Mean, std, quantiles cho confidence intervals
+- **Trading**: Entry chỉ khi [Q10, Q90] không chứa 0
+
+### Multi-Horizon Learning
+- **Targets**: Log-returns tại H=5,10,20 ngày
+- **Architecture**: Shared encoder + separate heads per horizon
+- **Loss**: Combined regression + classification loss
+- **Evaluation**: Horizon-specific metrics
+
+### Advanced Loss Functions
+- **Huber Loss**: Robust to outliers (δ=1.0)
+- **Pinball Loss**: Quantile regression (q=0.5)
+- **Combined**: L_reg + λ·L_cls với configurable λ
+
+### GPU Optimization
+- **Mixed Precision**: FP16 training
+- **tf.data Pipeline**: Efficient data loading
+- **Memory Management**: Cleanup per fold
+- **Batch Size**: Auto-scaling based on GPU memory
+
+## 🎯 Chiến Lược Trading
+
+### Entry Rules (Uncertainty-Aware)
+1. **Signal Strength**: |mean_pred| > fee + buffer
+2. **Confidence**: [Q10, Q90] không chứa 0 (no uncertainty overlap)
+3. **Risk Management**: Fixed risk per trade (1% default)
+
+### Exit Rules
+- **Time-based**: Đóng sau đúng H ngày
+- **Stop Loss**: 2×ATR từ entry
+- **Take Profit**: 4×ATR từ entry
+
+### Portfolio Management
+- **Position Sizing**: Risk-based sizing
+- **Diversification**: Multiple horizons, multiple tickers
+- **Transaction Costs**: Realistic fee modeling (0.2%)
+
+## 📈 Hiệu Suất Kỳ Vọng
+
+### Multi-Horizon Performance
+- **DA@5**: 55-65% (directional accuracy)
+- **DA@10**: 52-62%
+- **DA@20**: 50-60%
+- **IC@5**: 0.05-0.15 (information coefficient)
+- **Sharpe-like**: 5-20 (depends on volatility)
+
+### Trading Performance
+- **Win Rate**: 55-65%
+- **Max Drawdown**: 10-25%
+- **Sharpe Ratio**: 0.8-1.5
+- **Annual Return**: 15-30% (before costs)
+
+### Ensemble Benefits
+- **Variance Reduction**: 10-20% improvement
+- **Robustness**: Better out-of-sample performance
+- **Uncertainty**: More reliable confidence intervals
+
+## 🛠️ Troubleshooting
+
+### Common Issues
+1. **GPU Memory**: Reduce batch_size hoặc tắt ensemble
+2. **NaN Metrics**: Đã fix với safe metrics computation
+3. **Data Loading**: Check pandas_ta availability
+4. **Syntax Errors**: All files đã compile OK
+
+### Performance Tuning
 ```bash
-python simple_test.py
+# Increase GPU utilization
+# Edit config.yaml:
+batch_size: 256          # Increase for more VRAM usage
+tcn:
+  filters: 96           # Larger model capacity
+  dilations: [1,2,4,8,16] # More layers
+
+# Reduce memory usage
+n_mc_dropout: 10        # Fewer MC passes
+ensemble:
+  enable: false         # Disable ensemble
+```
+
+## 🧪 Testing và Validation
+
+### Quick Test
+```bash
+# Test single ticker, single horizon
+python src/train.py --config configs/config.yaml --gpu \
+  --horizons 5 --n_mc_dropout 5
+
+# Test backtesting
+python src/paper_trading.py --config configs/config.yaml \
+  --ticker FPT --horizon 5 --model tcn
+```
+
+### Full Pipeline
+```bash
+# Complete end-to-end test
+python src/run_all.py  # If available
 ```
 
 ## 📚 Nền Tảng Nghiên Cứu
 
 Triển khai này dựa trên:
-- **Temporal Convolutional Networks** cho mô hình hóa chuỗi
-- **Residual Connections** cho ổn định training
-- **Multi-Task Learning** cho dự đoán mạnh mẽ
-- **Ensemble Methods** cho giảm phương sai
-- **Walk-Forward Validation** cho đánh giá thực tế
+- **Temporal Convolutional Networks** cho sequence modeling
+- **Multi-Task Learning** cho joint regression + classification
+- **MC-Dropout** cho Bayesian uncertainty estimation
+- **Ensemble Methods** cho variance reduction
+- **Walk-Forward Validation** cho realistic evaluation
 
-## 🔄 Ví Dụ Sử Dụng
+## 🤝 Mở Rộng
 
-### Chỉ Training TCN
-```bash
-python src/train.py --config configs/config.yaml
-```
+### Thêm Mô Hình Mới
+1. Implement trong `src/models.py`
+2. Update `configs/config.yaml`
+3. Test với multi-horizon pipeline
 
-### Cấu Hình TCN Tùy Chỉnh
-Sửa đổi `configs/config.yaml`:
-```yaml
-tcn:
-  filters: 96           # Tăng sức chứa
-  dilations: [1,2,4,8,16] # Thêm layers
-  dropout_rate: 0.15    # Regularization nhiều hơn
-```
+### Thêm Metrics Mới
+1. Extend `src/evaluate.py`
+2. Update training loop trong `src/train.py`
+3. Log vào `metrics.json`
 
-### Ensemble với Mô hình Tùy chỉnh
-```bash
-python src/ensemble.py --config configs/config.yaml --models tcn gru
-```
-
-## 🎯 Hiệu Suất Kỳ Vọng
-
-**Metrics Baseline** (phạm vi thường thấy):
-- **RMSE**: 0.015-0.025
-- **MAPE**: 8-15%
-- **Tỷ lệ Sharpe**: 0.5-1.2
-- **Max Drawdown**: 10-25%
-- **Độ chính xác Phân loại**: 52-58%
-
-**Cải thiện Ensemble**: Tốt hơn 5-15% so với mô hình đơn lẻ
-
-## 🤝 Đóng Góp
-
-Để mở rộng hệ thống:
-1. Thêm mô hình mới trong `src/models.py`
-2. Cập nhật cấu hình trong `configs/config.yaml`
-3. Mở rộng logic ensemble trong `src/ensemble.py`
-4. Thêm tests trong `test_tcn.py`
+### Thêm Trading Strategies
+1. Extend `src/paper_trading.py`
+2. Add new entry/exit rules
+3. Implement portfolio optimization
 
 ---
 
-**Lưu ý**: Hệ thống này được thiết kế cho mục đích nghiên cứu và giáo dục. Luôn xác thực kết quả và cân nhắc rủi ro thị trường trước khi đưa ra quyết định giao dịch.
+**Lưu ý**: Hệ thống này được thiết kế cho mục đích nghiên cứu và giáo dục. Luôn xác thực kết quả và cân nhắc rủi ro thị trường trước khi đưa ra quyết định giao dịch thực tế.

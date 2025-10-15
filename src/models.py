@@ -69,7 +69,7 @@ def pinball_loss(q):
         return tf.reduce_mean(tf.maximum(q * e, (q - 1) * e))
     return loss
 
-def huber_multi_loss(delta=1.0):
+def huber_multi_loss(delta=0.1):  # Giảm từ 1.0 xuống 0.1 cho log-returns
     base = tf.keras.losses.Huber(delta=delta, reduction=tf.keras.losses.Reduction.NONE)
     def loss(y_true, y_pred):
         # y_* shape: [batch, H]
@@ -84,7 +84,7 @@ def bce_multi_loss():
         return tf.reduce_mean(l)
     return loss
 
-def combined_multihorizon_loss(loss_type="huber", delta=1.0, lam=0.3):
+def combined_multihorizon_loss(loss_type="huber", delta=0.1, lam=0.3):  # Giảm delta xuống 0.1
     reg_loss_fn = huber_multi_loss(delta=delta) if loss_type == "huber" else None
     if loss_type == "pinball":
         # Use median quantile as default
@@ -184,7 +184,7 @@ def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4
 
         model.compile(
             optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
-            loss=combined_multihorizon_loss(loss_type=loss_type, delta=1.0, lam=lambda_cls),
+            loss=combined_multihorizon_loss(loss_type=loss_type, delta=0.1, lam=lambda_cls),
             metrics={'reg': ['mae']}
         )
     elif use_multitask:
@@ -201,7 +201,7 @@ def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4
 
         model.compile(
             optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
-            loss=huber_multi_loss(delta=1.0),
+            loss=huber_multi_loss(delta=0.1),
             metrics=['mae']
         )
     else:
@@ -212,7 +212,7 @@ def make_tcn_residual(input_shape, filters=64, kernel_size=5, dilations=[1, 2, 4
         model = tf.keras.Model(x_in, y, name="tcn_residual")
         model.compile(
             optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=float(1e-4)),
-            loss=tf.keras.losses.Huber(delta=1.0),
+            loss=tf.keras.losses.Huber(delta=0.1),
             metrics=['mae']
         )
     
